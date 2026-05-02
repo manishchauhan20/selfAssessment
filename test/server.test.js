@@ -16,7 +16,7 @@ function makeSimplePdf(text) {
   objects[2] = `2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n`;
   objects[3] =
     `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ` +
-    `/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n`;
+    `/Resources << /Font << /F1 5 0 R >> >> / 4 0 R >>\nendobj\n`;
   objects[4] =
     `4 0 obj\n<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n` +
     `${stream}endstream\nendobj\n`;

@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  parsePdfTextToStructuredData,
   validateParsedPDFData,
   getValidChapters,
   getValidTopics,
@@ -92,3 +93,32 @@ test("safeGenerateExam always returns questions with AI failure", async () => {
   assert.ok(Array.isArray(response.quiz));
   assert.equal(response.quiz.length, 3);
 });
+
+test("parsePdfTextToStructuredData uses contents outline for numbered chapters and topics", () => {
+  const parsed = parsePdfTextToStructuredData(`
+    Contents
+    1 Motion in a Straight Line 12
+    Distance and Displacement 14
+    Velocity and Acceleration 18
+    2 Laws of Motion 25
+    Force and Inertia 28
+
+    1 Motion in a Straight Line
+    Distance and Displacement
+    Distance and displacement explain change in position.
+    What is displacement?
+    Velocity and Acceleration
+    Velocity and acceleration explain rates of motion.
+    What is acceleration?
+  `);
+
+  assert.ok(parsed["1 Motion in a Straight Line"]);
+  assert.deepEqual(
+    Object.keys(parsed["1 Motion in a Straight Line"].topics),
+    ["Distance and Displacement", "Velocity and Acceleration"],
+  );
+});
+
+
+
+

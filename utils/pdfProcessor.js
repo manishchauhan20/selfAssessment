@@ -1,5 +1,39 @@
 const { PDFParse } = require("pdf-parse");
 
+function normalizePageText(value) {
+  return String(value || "").replace(/\r/g, "").trim();
+}
+
+function isContentsPage(text) {
+  const normalized = normalizePageText(text);
+  if (!normalized) return false;
+
+  return /(?:^|\n)\s*(table of contents|contents)\s*(?:\n|$)/iu.test(normalized);
+}
+
+function selectContentsWindow(pages) {
+  const safePages = Array.isArray(pages)
+    ? pages
+        .map((page) => ({
+          num: Number(page?.num) || 0,
+          text: normalizePageText(page?.text),
+        }))
+        .filter((page) => page.num > 0 && page.text)
+        .sort((a, b) => a.num - b.num)
+    : [];
+
+  if (safePages.length === 0) return "";
+
+  const contentsIndex = safePages.findIndex((page) => isContentsPage(page.text));
+  if (contentsIndex < 0) return "";
+
+  return safePages
+    .slice(contentsIndex, contentsIndex + 3)
+    .map((page) => page.text)
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 const extractTextFromPDF = async (fileBuffer) => {
   let parser;
 
@@ -10,14 +44,13 @@ const extractTextFromPDF = async (fileBuffer) => {
 
     parser = new PDFParse({ data: fileBuffer });
     const data = await parser.getText();
-    const text = data?.text?.trim();
+    const contentsWindowText = selectContentsWindow(data?.pages);
+    const text = normalizePageText(contentsWindowText || data?.text);
 
     if (!text) {
       throw new Error("PDF parsed but no text content found.");
     }
 
-    // Return full extracted text so downstream chapter filtering can reliably
-    // find chapters that appear later in the PDF.
     return text;
   } catch (error) {
     console.error("PDF Processor Error:", error.message);

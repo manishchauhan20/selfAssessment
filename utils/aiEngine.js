@@ -22,7 +22,13 @@ function getModel() {
   const genAI = new GoogleGenerativeAI(apiKey);
   cachedModel = genAI.getGenerativeModel({
     model: modelName,
-    generationConfig: { responseMimeType: "application/json" },
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.9,
+      topP: 0.95,
+      topK: 40,
+      maxOutputTokens: 8192,
+    },
   });
   cachedApiKey = apiKey;
   cachedModelName = modelName;
@@ -71,36 +77,55 @@ const generateQuiz = async (data) => {
   );
 
   const baseSystemInstruction = `
-        You are an expert exam setter. Create a multiple-choice quiz with ${questionCount} questions.
-        Difficulty Level: ${difficulty || "medium"}.
+You are an expert exam setter.
+Create exactly ${questionCount} high-quality multiple-choice questions.
+Difficulty level: ${difficulty || "medium"}.
 
-        OUTPUT JSON ONLY. FORMAT:
-        {
-            "quiz": [
-                {
-                    "q": "Question?",
-                    "options": ["A", "B", "C", "D"],
-                    "ans": "Correct Option String",
-                    "exp": "Explanation"
-                }
-            ]
-        }
-    `;
+Strict rules:
+1) Every question must be conceptually unique (no repeated concept, no reworded duplicates).
+2) Do NOT repeat the same opening pattern for questions.
+3) Every question must have exactly 4 DISTINCT options.
+4) Exactly one option must be correct.
+5) Explanations must be short but specific to the asked concept.
+6) Questions must be syllabus-aligned and grade-appropriate.
+
+Return JSON only in this shape:
+{
+  "quiz": [
+    {
+      "q": "Question?",
+      "options": ["A", "B", "C", "D"],
+      "ans": "Correct Option String",
+      "exp": "Explanation"
+    }
+  ]
+}
+`;
 
   let userPrompt = "";
 
   if (source === "ncert") {
     userPrompt = `
-        ${baseSystemInstruction}
-        CONTEXT: Class ${className}, Subject: ${subject}, Chapter: ${chapter}, Topic: ${topic}.
-        Strictly follow NCERT syllabus.
-        `;
+${baseSystemInstruction}
+CONTEXT:
+- Class: ${className}
+- Subject: ${subject}
+- Chapter: ${chapter}
+- Topic: ${topic}
+
+Strictly follow NCERT and keep questions distributed across different sub-concepts in this chapter/topic.
+`;
   } else {
     userPrompt = `
-        ${baseSystemInstruction}
-        CONTEXT: Chapter: ${chapter}, Topic: ${topic}.
-        CONTENT: ${pdfText ? pdfText.substring(0, 10000) : "No text provided, generate based on chapter name."}
-        `;
+${baseSystemInstruction}
+CONTEXT:
+- Chapter: ${chapter}
+- Topic: ${topic}
+- PDF content:
+${pdfText ? pdfText.substring(0, 18000) : "No text provided, generate based on chapter name."}
+
+Ensure each question targets a different idea from the provided context.
+`;
   }
 
   try {

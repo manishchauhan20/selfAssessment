@@ -16,7 +16,7 @@ function makeSimplePdf(text) {
   objects[2] = `2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n`;
   objects[3] =
     `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ` +
-    `/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n`;
+    `/Resources << /Font << /F1 5 0 R >> >> `;
   objects[4] =
     `4 0 obj\n<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n` +
     `${stream}endstream\nendobj\n`;
@@ -75,6 +75,41 @@ test("extractTextFromPDF keeps full extracted text for chapter filtering", async
     const extractedText = await extractTextFromPDFWithMock(Buffer.from("mock-pdf"));
     assert.equal(extractedText.endsWith(marker), true);
     assert.ok(extractedText.length > 32000);
+  } finally {
+    pdfParse.PDFParse = originalPDFParse;
+    delete require.cache[require.resolve("../utils/pdfProcessor")];
+  }
+});
+
+test("extractTextFromPDF keeps only contents page and next two pages when contents exists", async () => {
+  const pdfParse = require("pdf-parse");
+  const originalPDFParse = pdfParse.PDFParse;
+
+  pdfParse.PDFParse = class FakePDFParse {
+    async getText() {
+      return {
+        text: "FULL_DOCUMENT_TEXT",
+        pages: [
+          { num: 1, text: "Cover Page" },
+          { num: 2, text: "Contents\n1 Motion\nDistance and Displacement" },
+          { num: 3, text: "1 Motion\nDistance and Displacement\nWhat is displacement?" },
+          { num: 4, text: "Velocity and Acceleration\nWhat is acceleration?" },
+          { num: 5, text: "This page should not be included." },
+        ],
+      };
+    }
+
+    async destroy() {}
+  };
+
+  delete require.cache[require.resolve("../utils/pdfProcessor")];
+  const { extractTextFromPDF: extractTextFromPDFWithMock } = require("../utils/pdfProcessor");
+
+  try {
+    const extractedText = await extractTextFromPDFWithMock(Buffer.from("mock-pdf"));
+    assert.match(extractedText, /Contents/);
+    assert.match(extractedText, /Velocity and Acceleration/);
+    assert.doesNotMatch(extractedText, /should not be included/);
   } finally {
     pdfParse.PDFParse = originalPDFParse;
     delete require.cache[require.resolve("../utils/pdfProcessor")];

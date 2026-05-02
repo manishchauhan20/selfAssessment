@@ -70,6 +70,19 @@ function normalizeKey(value) {
  * @param {unknown} value
  * @returns {string}
  */
+function normalizeHeadingKey(value) {
+  return normalizeKey(value)
+    .replace(/^(chapter|unit|lesson|topic|section)\s+/iu, "")
+    .replace(/^\d+(?:\.\d+)*[\)\].:\-]?\s*/u, "")
+    .replace(/\s+\d+$/u, "")
+    .replace(/[._·•-]{2,}\s*\d+$/u, "")
+    .trim();
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string}
+ */
 function normalizeQuestionText(value) {
   return normalizeLabel(String(value || "").replace(/^[Qq](?:uestion)?\s*\d+[\)\].:\-]?\s*/u, ""));
 }
@@ -98,7 +111,10 @@ function isValidQuestion(question) {
  * @returns {boolean}
  */
 function isChapterHeading(line) {
-  return /^(chapter|unit)\s+([0-9]+|[ivxlcdm]+)\b/i.test(normalizeLabel(line));
+  const text = normalizeLabel(line);
+  if (/^(chapter|unit)\s+([0-9]+|[ivxlcdm]+)\b/i.test(text)) return true;
+  return /^\d{1,2}[\)\].:\-]?\s+[A-Z][A-Za-z0-9(),/&\- ]{1,80}$/u.test(text)
+    && !/^\d+\.\d+/u.test(text);
 }
 
 /**
@@ -135,6 +151,131 @@ function splitIntoNormalizedLines(fullText) {
     .split(/\r?\n/)
     .map((line) => normalizeLabel(line))
     .filter((line) => line && !isPageMarker(line));
+}
+
+/**
+ * @param {unknown} line
+ * @returns {string}
+ */
+function stripArtifacts(line) {
+  return normalizeLabel(line)
+    .replace(/[._·•-]{2,}\s*\d+$/u, "")
+    .replace(/\s+\d+$/u, "")
+    .trim();
+}
+
+/**
+ * @param {unknown} line
+ * @returns {boolean}
+ */
+function isLikelyTitleLine(line) {
+  const text = stripArtifacts(line);
+  if (!text || text.length > 90) return false;
+  if (/[?.!]$/u.test(text)) return false;
+  if (/[;:]{2,}/u.test(text)) return false;
+  const tokenCount = text.split(/\s+/u).filter(Boolean).length;
+  return tokenCount >= 1 && tokenCount <= 12;
+}
+
+/**
+ * @param {string[]} lines
+ * @returns {number}
+ */
+function findStartIndex(lines) {
+  return lines.findIndex((line) => /^(table of |)$/iu.test(normalizeLabel(line)));
+}
+
+/**
+ * @param {unknown} line
+ * @returns {boolean}
+ */
+function isChapterEntry(line) {
+  const text = stripArtifacts(line);
+  if (!text) return false;
+  if (isChapterHeading(text)) return true;
+  return /^\d{1,2}[\)\].:\-]?\s+\S+/u.test(text) && !/^\d+\.\d+/u.test(text);
+}
+
+/**
+ * @param {unknown} line
+ * @returns {boolean}
+ */
+function isTopicEntry(line) {
+  const text = stripArtifacts(line);
+  if (!text || isChapterEntry(text)) return false;
+  if (/^(appendix|index|glossary|references?)\b/iu.test(text)) return false;
+  if (/^\d+\.\d+(?:\.\d+)*\s+\S+/u.test(text)) return true;
+  return isLikelyTitleLine(text);
+}
+
+/**
+ * @param {string[]} lines
+ * @returns {Record<string, string[]>}
+ */
+function extractOutline(lines) {
+  const startIndex = findStartIndex(lines);
+  if (startIndex < 0) return {};
+
+  /** @type {Record<string, string[]>} */
+  const outline = {};
+  let currentChapter = "";
+  let acceptedLines = 0;
+
+  for (let index = startIndex + 1; index < Math.min(lines.length, startIndex + 120); index += 1) {
+    const rawLine = lines[index];
+    const line = stripArtifacts(rawLine);
+    if (!line) continue;
+
+    if (acceptedLines >= 8 && !isLikelyTitleLine(line) && !isChapterEntry(line)) {
+      break;
+    }
+
+    if (acceptedLines >= 12 && /^chapter\s+\d+\b/iu.test(line)) {
+      break;
+    }
+
+    if (isChapterEntry(line)) {
+      currentChapter = line;
+      if (!outline[currentChapter]) {
+        outline[currentChapter] = [];
+      }
+      acceptedLines += 1;
+      continue;
+    }
+
+    if (currentChapter && isTopicEntry(line)) {
+      const topics = outline[currentChapter] || [];
+      if (!topics.some((topic) => normalizeKey(topic) === normalizeKey(line))) {
+        topics.push(line);
+      }
+      outline[currentChapter] = topics;
+      acceptedLines += 1;
+      continue;
+    }
+
+    if (acceptedLines >= 8) {
+      break;
+    }
+  }
+
+  return outline;
+}
+
+/**
+ * @param {Record<string, string[]>} outline
+ * @returns {Map<string, string>}
+ */
+function buildOutlineLookup(outline) {
+  const lookup = new Map();
+
+  for (const key of Object.keys(outline || {})) {
+    const normalized = normalizeHeadingKey(key);
+    if (normalized && !lookup.has(normalized)) {
+      lookup.set(normalized, key);
+    }
+  }
+
+  return lookup;
 }
 
 /**
@@ -226,20 +367,61 @@ function extractQuestionCandidates(content, topicName, chapterName) {
  */
 function parsePdfTextToStructuredData(fullText) {
   const lines = splitIntoNormalizedLines(fullText);
+  const Outline = extractOutline(lines);
+  const outlineChapterLookup = buildOutlineLookup(Outline);
   /** @type {ParsedPdfData} */
   const dataMap = {};
 
   let currentChapter = DEFAULT_CHAPTER_TITLE;
   let currentTopic = DEFAULT_TOPIC_TITLE;
   let hasAnyChapterHeading = false;
+  let insideBlock = false;
 
   ensureTopicNode(dataMap, currentChapter, currentTopic);
 
+  for (const [chapterName, topics] of Object.entries(Outline)) {
+    if (!chapterName) continue;
+    if (!dataMap[chapterName]) {
+      dataMap[chapterName] = { topics: {} };
+    }
+    for (const topicName of uniqueStrings(topics)) {
+      ensureTopicNode(dataMap, chapterName, topicName || DEFAULT_TOPIC_TITLE);
+    }
+  }
+
   for (const line of lines) {
+    if (/^(table of |)$/iu.test(line)) {
+      insideBlock = true;
+      continue;
+    }
+
+    if (insideBlock) {
+      if (isChapterEntry(line) || isTopicEntry(line)) {
+        continue;
+      }
+      if (!isLikelyTitleLine(line)) {
+        insideBlock = false;
+      } else {
+        continue;
+      }
+    }
+
     if (isChapterHeading(line)) {
-      currentChapter = normalizeLabel(line);
+      const chapterKey = normalizeHeadingKey(line);
+      currentChapter = outlineChapterLookup.get(chapterKey) || normalizeLabel(line);
       currentTopic = DEFAULT_TOPIC_TITLE;
       hasAnyChapterHeading = true;
+      ensureTopicNode(dataMap, currentChapter, currentTopic);
+      continue;
+    }
+
+    const currentOutlineTopics = uniqueStrings(Outline[currentChapter] || []);
+    const matchedOutlineTopic = currentOutlineTopics.find(
+      (topicName) => normalizeHeadingKey(topicName) === normalizeHeadingKey(line),
+    );
+
+    if (matchedOutlineTopic) {
+      currentTopic = matchedOutlineTopic;
       ensureTopicNode(dataMap, currentChapter, currentTopic);
       continue;
     }
@@ -453,20 +635,59 @@ function normalizeQuestionCount(value) {
 }
 
 /**
+ * @param {unknown} content
+ * @returns {string[]}
+ */
+function extractOptionFragments(content) {
+  return uniqueStrings(
+    normalizeMultiline(content)
+      .split(/\n+/u)
+      .map((line) => normalizeLabel(line))
+      .filter((line) => line.length >= 18)
+      .map((line) => line.replace(/[.;:]+$/u, ""))
+      .slice(0, 40),
+  );
+}
+
+/**
+ * @param {unknown} questionText
+ * @param {unknown} topicName
+ * @returns {string}
+ */
+function buildAnswerText(questionText, topicName) {
+  const topic = normalizeLabel(topicName) || DEFAULT_TOPIC_TITLE;
+  const seed = normalizeLabel(String(questionText || "").replace(/[?]+$/u, "")).slice(0, 80);
+  if (!seed) return `Core concept of ${topic}`;
+  return `Core concept of ${topic}: ${seed}`;
+}
+
+/**
  * @param {unknown} chapterName
  * @param {unknown} topicName
  * @param {string} answer
+ * @param {string} questionText
+ * @param {string} content
+ * @param {number} index
  * @returns {string[]}
  */
-function createDistractors(chapterName, topicName, answer) {
+function createDistractors(chapterName, topicName, answer, questionText, content, index) {
   const chapter = normalizeLabel(chapterName) || DEFAULT_CHAPTER_TITLE;
   const topic = normalizeLabel(topicName) || DEFAULT_TOPIC_TITLE;
-  return [
+  const fragments = extractOptionFragments(content);
+  const hint = normalizeLabel(String(questionText || "").replace(/[?]+$/u, "").split(" ").slice(0, 5).join(" "));
+
+  const options = uniqueStrings([
     answer,
-    `A detail unrelated to ${topic}`,
-    `An incorrect statement about ${chapter}`,
+    fragments[index % Math.max(1, fragments.length)] || `A detail linked to ${topic} but not ${hint || "the asked concept"}`,
+    fragments[(index + 3) % Math.max(1, fragments.length)] || `An incorrect statement about ${chapter}`,
     `Cannot be inferred from ${topic}`,
-  ];
+  ]);
+
+  while (options.length < 4) {
+    options.push(`Alternative option ${options.length + 1}`);
+  }
+
+  return options.slice(0, 4);
 }
 
 /**
@@ -494,11 +715,25 @@ function buildLocalQuiz(questionSeeds, questionCount, chapterName, topicName, co
 
   /** @type {QuizItem[]} */
   const quiz = [];
+  const variants = [
+    "What is the key idea behind",
+    "Which statement best explains",
+    "How would you describe",
+    "What is most accurate about",
+    "Which option correctly defines",
+    "What is a core principle of",
+  ];
 
   for (let index = 0; index < requested; index += 1) {
-    const rawQuestion = ensureQuestionMark(seeds[index % seeds.length]);
-    const answer = `Key point from ${normalizeLabel(topicName) || DEFAULT_TOPIC_TITLE}`;
-    const options = createDistractors(chapterName, topicName, answer);
+    const baseSeed = ensureQuestionMark(seeds[index % seeds.length]);
+    const seedWithoutQ = normalizeLabel(String(baseSeed).replace(/[?]+$/u, ""));
+    const variantLead = variants[index % variants.length];
+    const rawQuestion =
+      index < seeds.length
+        ? baseSeed
+        : ensureQuestionMark(`${variantLead} ${seedWithoutQ} (variant ${index + 1})`);
+    const answer = buildAnswerText(rawQuestion, topicName);
+    const options = createDistractors(chapterName, topicName, answer, rawQuestion, content, index);
     quiz.push({
       q: rawQuestion,
       options,
@@ -541,6 +776,46 @@ function sanitizeQuizItem(rawItem) {
 }
 
 /**
+ * @param {string} value
+ * @returns {string}
+ */
+function normalizeQuestionSignature(value) {
+  return normalizeLabel(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => token.length > 2)
+    .slice(0, 10)
+    .join(" ");
+}
+
+/**
+ * @param {QuizItem[]} items
+ * @param {number} limit
+ * @returns {QuizItem[]}
+ */
+function dedupeQuizItems(items, limit) {
+  const seenQuestionSignatures = new Set();
+  /** @type {QuizItem[]} */
+  const unique = [];
+
+  for (const item of items) {
+    if (unique.length >= limit) break;
+
+    const qSig = normalizeQuestionSignature(item.q);
+    if (!qSig) continue;
+
+    if (seenQuestionSignatures.has(qSig)) continue;
+
+    seenQuestionSignatures.add(qSig);
+    unique.push(item);
+  }
+
+  return unique;
+}
+
+/**
  * @param {unknown} quizPayload
  * @param {string[]} questionSeeds
  * @param {number} questionCount
@@ -573,17 +848,27 @@ function sanitizeQuizOutput(
     rawQuizArray
       .map((item) => sanitizeQuizItem(item))
       .filter((item) => item !== null)
-      .slice(0, requested)
   );
+  const uniqueFromAI = dedupeQuizItems(sanitizedFromAI, requested);
 
-  if (sanitizedFromAI.length >= requested) {
-    return { quiz: sanitizedFromAI, usedLocalFallback: false };
+  if (uniqueFromAI.length >= requested) {
+    return { quiz: uniqueFromAI, usedLocalFallback: false };
   }
 
-  const missing = requested - sanitizedFromAI.length;
+  const missing = requested - uniqueFromAI.length;
   const localFill = buildLocalQuiz(questionSeeds, missing, chapterName, topicName, content);
+  const merged = dedupeQuizItems([...uniqueFromAI, ...localFill], requested);
+
+  if (merged.length < requested) {
+    const refill = buildLocalQuiz(questionSeeds, requested - merged.length, chapterName, topicName, content);
+    return {
+      quiz: dedupeQuizItems([...merged, ...refill], requested),
+      usedLocalFallback: localFill.length > 0 || refill.length > 0,
+    };
+  }
+
   return {
-    quiz: [...sanitizedFromAI, ...localFill],
+    quiz: merged,
     usedLocalFallback: localFill.length > 0,
   };
 }

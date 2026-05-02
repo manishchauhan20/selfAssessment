@@ -2,6 +2,7 @@ const { mongoose } = require('../config/database');
 
 const examAttemptSchema = new mongoose.Schema(
   {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     source: { type: String, enum: ['ncert', 'other'], required: true },
     className: { type: String, default: '' },
     subject: { type: String, default: '' },
@@ -13,9 +14,19 @@ const examAttemptSchema = new mongoose.Schema(
     score: { type: Number, min: 0, max: 100, default: null },
     correct: { type: Number, min: 0, default: null },
     wrong: { type: Number, min: 0, default: null },
-    violations: { type: Number, min: 0, default: 0 },
     totalQuestions: { type: Number, min: 0, default: null },
+    reviewHTML: { type: String, default: '' },
+    quiz: [
+      {
+        q: { type: String, default: '' },
+        options: [{ type: String }],
+        ans: { type: String, default: '' },
+        exp: { type: String, default: '' },
+        userAnswer: { type: String, default: '' },
+      },
+    ],
     usedLocalFallback: { type: Boolean, default: false },
+    clientAttemptId: { type: String, trim: true, unique: true, sparse: true },
   },
   {
     timestamps: true,

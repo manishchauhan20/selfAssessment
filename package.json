@@ -14,18 +14,17 @@
   "description": "",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "axios": "^1.13.5",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
-    "dotenv": "^17.2.4",
+    "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "i": "^0.3.7",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.2.1",
     "multer": "^2.0.2",
-    "next": "^16.1.6",
-    "pdf-parse": "^2.4.5",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "nodemailer": "^8.0.1",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
